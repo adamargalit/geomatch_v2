@@ -1,0 +1,8 @@
+python-dotenv
+requests
+mercantile
+tqdm
+Pillow
+rasterio 
+pyproj
+opencv-python-headless
