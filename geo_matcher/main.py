@@ -1,23 +1,51 @@
-# main.py (With Resource Monitoring AND Image Display)
+# main.py (With Configurable Monitoring)
 
 import argparse
 import os
 import time
 import sys
-import threading # For monitoring thread
-import psutil    # For CPU/RAM monitoring
-import cv2       # For displaying images
+import threading # For monitoring thread (Class defined but potentially not used)
+import cv2         # For displaying images
 
-# --- Optional GPU Monitoring ---
-try:
-    import pynvml
-    pynvml.nvmlInit()
-    GPU_MONITORING_AVAILABLE = True
-    print("NVIDIA GPU monitoring enabled.")
-except Exception as e:
-    GPU_MONITORING_AVAILABLE = False
-    print(f"NVIDIA GPU monitoring unavailable (pynvml error: {e}). Will only monitor CPU/RAM.")
-# --- End Optional GPU Monitoring ---
+# --- Configuration Flag for Monitoring ---
+ENABLE_MONITORING = False # Set to True to enable, False to disable
+# -----------------------------------------
+
+# --- Conditional Monitoring Imports and Initialization ---
+GPU_MONITORING_AVAILABLE = False # Default status
+PSUTIL_AVAILABLE = False       # Default status
+pynvml = None                  # Define pynvml in this scope, default to None
+psutil = None                  # Define psutil in this scope, default to None
+
+if ENABLE_MONITORING:
+    print("Attempting to enable resource monitoring...")
+    # Try to import and initialize psutil for CPU/RAM
+    try:
+        import psutil
+        PSUTIL_AVAILABLE = True
+        print("psutil imported successfully (CPU/RAM monitoring possible).")
+    except ImportError:
+        print("Warning: psutil not found. CPU/RAM monitoring disabled.")
+        PSUTIL_AVAILABLE = False # Explicitly set False on failure
+
+    # Try to import and initialize pynvml for GPU
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        GPU_MONITORING_AVAILABLE = True # Set flag only if init succeeded
+        print("pynvml imported and initialized successfully (GPU monitoring possible).")
+    except ImportError:
+        print("pynvml library not found. GPU monitoring disabled.")
+        GPU_MONITORING_AVAILABLE = False
+    except pynvml.NVMLError as nvml_error:
+        print(f"pynvml initialization failed (NVML Error: {nvml_error}). GPU monitoring disabled.")
+        GPU_MONITORING_AVAILABLE = False # Ensure False on init failure
+    except Exception as e:
+        print(f"An unexpected error occurred during pynvml setup: {e}. GPU monitoring disabled.")
+        GPU_MONITORING_AVAILABLE = False # Ensure False on other errors
+else:
+    print("Resource monitoring disabled by configuration flag (ENABLE_MONITORING=False).")
+# --- End Conditional Monitoring Setup ---
 
 
 # Assuming config.py is in the same directory or Python path
@@ -25,11 +53,16 @@ try:
     import config
 except ModuleNotFoundError:
     print("ERROR: config.py not found. Please ensure it exists in the project root.")
-    if GPU_MONITORING_AVAILABLE: pynvml.nvmlShutdown()
+    # Check if NVML was successfully initialized before trying to shut down
+    if GPU_MONITORING_AVAILABLE and pynvml:
+        try: pynvml.nvmlShutdown()
+        except Exception: pass # Ignore shutdown errors here
     sys.exit(1)
 except Exception as e:
     print(f"Error loading config: {e}")
-    if GPU_MONITORING_AVAILABLE: pynvml.nvmlShutdown()
+    if GPU_MONITORING_AVAILABLE and pynvml:
+        try: pynvml.nvmlShutdown()
+        except Exception: pass
     sys.exit(1)
 
 
@@ -39,16 +72,21 @@ try:
     from src.visual_localizer import run_localization, RESULT_SUCCESS
 except ModuleNotFoundError:
      print("ERROR: Could not import from src.visual_localizer. Ensure src/__init__.py exists and src is in the Python path.")
-     if GPU_MONITORING_AVAILABLE: pynvml.nvmlShutdown()
+     if GPU_MONITORING_AVAILABLE and pynvml:
+         try: pynvml.nvmlShutdown()
+         except Exception: pass
      sys.exit(1)
 except ImportError as e:
      print(f"ERROR: Importing from src.visual_localizer failed: {e}")
-     if GPU_MONITORING_AVAILABLE: pynvml.nvmlShutdown()
+     if GPU_MONITORING_AVAILABLE and pynvml:
+         try: pynvml.nvmlShutdown()
+         except Exception: pass
      sys.exit(1)
 
 # ==================================================
-# <<< START: Resource Monitoring Code Section >>>
+# <<< Resource Monitoring Code Section (Uncommented) >>>
 # ==================================================
+# Class definition remains uncommented
 class ResourceMonitor:
     def __init__(self, interval=0.2):
         self.interval = interval
@@ -60,9 +98,9 @@ class ResourceMonitor:
         self.gpu_mem_usage = []
         self.gpu_handle = None
 
-        if GPU_MONITORING_AVAILABLE:
+        # Try to get GPU handle only if GPU monitoring was successfully initialized
+        if GPU_MONITORING_AVAILABLE and pynvml:
             try:
-                # Assuming single GPU system or monitoring the first GPU
                 self.gpu_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
                 print(f"Monitoring GPU: {pynvml.nvmlDeviceGetName(self.gpu_handle)}")
             except Exception as e:
@@ -72,53 +110,54 @@ class ResourceMonitor:
     def _monitor(self):
         """Monitoring loop runs in a separate thread."""
         while not self._stop_event.is_set():
-            # CPU Usage (System Wide)
-            try:
-                self.cpu_usage.append(psutil.cpu_percent(interval=None))
-            except Exception as e:
-                print(f"\nError getting CPU usage: {e}", end="")
-                self.cpu_usage.append(None)
-
-            # RAM Usage (System Wide)
-            try:
-                self.ram_usage.append(psutil.virtual_memory().percent)
-            except Exception as e:
-                print(f"\nError getting RAM usage: {e}", end="")
-                self.ram_usage.append(None)
-
-            # GPU Usage (if available and handle is valid)
-            if self.gpu_handle:
+            # CPU Usage - Check if psutil is available
+            if PSUTIL_AVAILABLE and psutil:
                 try:
-                    # Try querying GPU status
+                    self.cpu_usage.append(psutil.cpu_percent(interval=None))
+                except Exception as e:
+                    # print(f"\nError getting CPU usage: {e}", end="") # Less verbose
+                    self.cpu_usage.append(None)
+            else:
+                 self.cpu_usage.append(None) # Append None if psutil not available
+
+            # RAM Usage - Check if psutil is available
+            if PSUTIL_AVAILABLE and psutil:
+                try:
+                    self.ram_usage.append(psutil.virtual_memory().percent)
+                except Exception as e:
+                    # print(f"\nError getting RAM usage: {e}", end="") # Less verbose
+                    self.ram_usage.append(None)
+            else:
+                self.ram_usage.append(None) # Append None if psutil not available
+
+            # GPU Usage - Check if GPU handle is valid (implies GPU monitoring is available)
+            if self.gpu_handle and pynvml:
+                try:
                     util = pynvml.nvmlDeviceGetUtilizationRates(self.gpu_handle)
                     mem_info = pynvml.nvmlDeviceGetMemoryInfo(self.gpu_handle)
                     self.gpu_usage.append(util.gpu)
                     self.gpu_mem_usage.append(mem_info.used / mem_info.total * 100 if mem_info.total > 0 else 0)
-                # --- Catch specific NVML error ---
-                except pynvml.NVMLError as nvml_error:
-                    print(f"\nNVML Error during GPU query: {nvml_error}", end="")
-                    self.gpu_usage.append(None) # Append None to keep lists aligned
-                    self.gpu_mem_usage.append(None)
-                except Exception as e:
-                    # Catch any other unexpected errors
-                    print(f"\nUnexpected Error during GPU query: {e}", end="")
+                except pynvml.NVMLError: # Catch specific NVML error silently during loop
                     self.gpu_usage.append(None)
                     self.gpu_mem_usage.append(None)
-                # --- End error catching ---
+                except Exception: # Catch any other unexpected errors silently
+                    self.gpu_usage.append(None)
+                    self.gpu_mem_usage.append(None)
+            else:
+                 # Append None if GPU monitoring not available/handle invalid
+                 self.gpu_usage.append(None)
+                 self.gpu_mem_usage.append(None)
 
-            # Wait for the next interval, checking stop event periodically
-            # Use a shorter wait within a loop to check stop_event more often
+            # Wait for the next interval
             wait_start = time.monotonic()
             while time.monotonic() < wait_start + self.interval:
-                 if self._stop_event.is_set():
-                     break
-                 time.sleep(0.01) # Sleep briefly to avoid busy-waiting
+                 if self._stop_event.is_set(): break
+                 time.sleep(0.01)
 
     def start(self):
         """Starts the monitoring thread."""
-        if self._thread is not None and self._thread.is_alive():
-            print("Monitor already running.")
-            return
+        if self._thread is not None and self._thread.is_alive(): return # Already running
+        # Reset stats lists
         self.cpu_usage = []
         self.ram_usage = []
         self.gpu_usage = []
@@ -126,52 +165,41 @@ class ResourceMonitor:
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._monitor, daemon=True)
         self._thread.start()
-        print("Resource monitor started.")
+        print("Resource monitor thread started.")
 
     def stop(self):
         """Stops the monitoring thread and returns results."""
         if self._thread is None or not self._thread.is_alive():
-            print("Monitor not running or already stopped.")
             # Return empty/zeroed stats if never started or already stopped
-            return {
-                "avg_cpu": 0, "max_cpu": 0, "avg_ram": 0, "max_ram": 0,
-                "avg_gpu_util": 0, "max_gpu_util": 0, "avg_gpu_mem": 0, "max_gpu_mem": 0
-            }
-
+            return None # Return None to indicate no stats were collected
 
         self._stop_event.set()
-        self._thread.join(timeout=self.interval * 2) # Wait for thread to finish with timeout
-        if self._thread.is_alive():
-             print("\nWarning: Resource monitor thread did not stop cleanly.")
+        self._thread.join(timeout=self.interval * 2)
+        if self._thread.is_alive(): print("\nWarning: Resource monitor thread did not stop cleanly.")
         self._thread = None
-        print("\nResource monitor stopped.")
+        print("\nResource monitor thread stopped.")
 
-        # Filter out None values (e.g., if query failed) before calculating stats
+        # Filter out None values before calculating stats
         valid_cpu = [x for x in self.cpu_usage if x is not None]
         valid_ram = [x for x in self.ram_usage if x is not None]
         valid_gpu = [x for x in self.gpu_usage if x is not None]
         valid_gpu_mem = [x for x in self.gpu_mem_usage if x is not None]
+
+        # Return None if no valid data points were collected for primary metrics
+        if not valid_cpu and not valid_ram:
+            return None
 
         results = {
             "avg_cpu": sum(valid_cpu) / len(valid_cpu) if valid_cpu else 0,
             "max_cpu": max(valid_cpu) if valid_cpu else 0,
             "avg_ram": sum(valid_ram) / len(valid_ram) if valid_ram else 0,
             "max_ram": max(valid_ram) if valid_ram else 0,
+            # Add GPU stats only if they were collected
+            "avg_gpu_util": sum(valid_gpu) / len(valid_gpu) if valid_gpu else 0,
+            "max_gpu_util": max(valid_gpu) if valid_gpu else 0,
+            "avg_gpu_mem": sum(valid_gpu_mem) / len(valid_gpu_mem) if valid_gpu_mem else 0,
+            "max_gpu_mem": max(valid_gpu_mem) if valid_gpu_mem else 0,
         }
-        # Only add GPU stats if monitoring was available AND successful queries were made
-        if GPU_MONITORING_AVAILABLE and self.gpu_handle:
-             results.update({
-                "avg_gpu_util": sum(valid_gpu) / len(valid_gpu) if valid_gpu else 0,
-                "max_gpu_util": max(valid_gpu) if valid_gpu else 0,
-                "avg_gpu_mem": sum(valid_gpu_mem) / len(valid_gpu_mem) if valid_gpu_mem else 0,
-                "max_gpu_mem": max(valid_gpu_mem) if valid_gpu_mem else 0,
-             })
-        # Add placeholders if GPU wasn't available/working, for consistent structure
-        else:
-             results.update({
-                "avg_gpu_util": 0, "max_gpu_util": 0, "avg_gpu_mem": 0, "max_gpu_mem": 0
-             })
-
         return results
 # ==================================================
 # <<< END: Resource Monitoring Code Section >>>
@@ -182,7 +210,7 @@ class ResourceMonitor:
 if __name__ == "__main__":
     # --- Argument Parsing ---
     parser = argparse.ArgumentParser(description="Localize an aerial photo using an offline map (Visual Localization Test).")
-    parser.add_argument("--lat", type=float, default=None, help="Optional: Latitude...") # Shortened help text
+    parser.add_argument("--lat", type=float, default=None, help="Optional: Latitude...")
     parser.add_argument("--lon", type=float, default=None, help="Optional: Longitude...")
     parser.add_argument("--no-save", action="store_true", help="Disable saving output images and coordinate file.")
     parser.add_argument("aerial_photo", type=str, help="Path to the input aerial photo.")
@@ -191,7 +219,7 @@ if __name__ == "__main__":
     # --- Get Coordinates ---
     latitude_to_use = args.lat
     longitude_to_use = args.lon
-    # (Coordinate prompting logic)
+    # (Coordinate prompting logic remains the same)
     if latitude_to_use is None:
         while True:
             try:
@@ -199,7 +227,7 @@ if __name__ == "__main__":
                 latitude_to_use = float(lat_str)
                 if -90 <= latitude_to_use <= 90: break
                 else: print("Latitude must be between -90 and 90.")
-            except ValueError: print("Invalid input...") # Shortened
+            except ValueError: print("Invalid input...")
             except Exception as e: print(f"An unexpected error occurred: {e}")
     if longitude_to_use is None:
         while True:
@@ -208,7 +236,7 @@ if __name__ == "__main__":
                 longitude_to_use = float(lon_str)
                 if -180 <= longitude_to_use <= 180: break
                 else: print("Longitude must be between -180 and 180.")
-            except ValueError: print("Invalid input...") # Shortened
+            except ValueError: print("Invalid input...")
             except Exception as e: print(f"An unexpected error occurred: {e}")
 
     # --- Initial Setup Prints ---
@@ -222,13 +250,20 @@ if __name__ == "__main__":
     except AttributeError: print("ERROR: OFFLINE_MAP_FILE not found..."); sys.exit(1)
     if not os.path.exists(args.aerial_photo): print(f"ERROR: Aerial photo not found..."); sys.exit(1)
 
-    # <<< --- START MONITORING --- >>>
-    print("-" * 30) # Separator
-    monitor = ResourceMonitor(interval=0.2) # Sample every 0.2 seconds
-    monitor.start()
-    time.sleep(0.1) # Give monitor a tiny moment to start
-    print("-" * 30) # Separator
-    # <<< --- END START MONITORING --- >>>
+
+    # <<< --- Conditional START MONITORING --- >>>
+    monitor = None  # Ensure 'monitor' exists, default to None
+    if ENABLE_MONITORING:
+        # Only create and start if monitoring is globally enabled AND
+        # at least one monitoring library (psutil or pynvml) was available
+        if PSUTIL_AVAILABLE or GPU_MONITORING_AVAILABLE:
+            print("-" * 30)
+            monitor = ResourceMonitor(interval=0.2)
+            monitor.start()
+            time.sleep(0.1) # Give monitor a tiny moment to start
+            print("-" * 30)
+        else:
+            print("Monitoring enabled but required libraries (psutil/pynvml) not available/initialized.")
 
     # --- Run Visual Localization ---
     print("\nCalling run_localization...")
@@ -242,17 +277,19 @@ if __name__ == "__main__":
     end_run_time = time.time()
     print(f"run_localization finished in {end_run_time - start_run_time:.2f} seconds.")
 
-    # <<< --- STOP MONITORING --- >>>
-    print("-" * 30) # Separator
-    usage_stats = monitor.stop()
-    print("-" * 30) # Separator
-    # <<< --- END STOP MONITORING --- >>>
+    # <<< --- Conditional STOP MONITORING --- >>>
+    usage_stats = None # Ensure 'usage_stats' exists, default to None
+    if monitor: # Check if monitor object was created and started
+        print("-" * 30)
+        usage_stats = monitor.stop() # Stop will return None if no data collected
+        print("-" * 30)
 
     # --- Process Result (Including Image Display) ---
+    # (This part remains largely the same)
     print(f"\n--- Result ---")
     print(f"Status: {status}")
 
-    display_windows_opened = False # Flag to track if we need waitKey
+    display_windows_opened = False
     if status == RESULT_SUCCESS and result_data:
         print(f"Calculated Latitude:  {result_data['lat']:.6f}")
         print(f"Calculated Longitude: {result_data['lon']:.6f}")
@@ -260,69 +297,69 @@ if __name__ == "__main__":
         if not args.no_save: print(f"\nOutput images/coordinates potentially saved.")
         else: print(f"\nOutput saving disabled via --no-save.")
 
-        # --- Display Logic ---
+        # Display Logic (Keep commented if display isn't working/needed)
         print("\nAttempting to display result images...")
         display_scale = 0.7
         img_box = result_data.get('img_with_box')
         img_matches = result_data.get('img_matches_vis')
-
         if img_box is not None:
              try:
                  img_box_display = cv2.resize(img_box, None, fx=display_scale, fy=display_scale)
                  cv2.imshow("Map Chip with Box / Center", img_box_display)
                  display_windows_opened = True
              except Exception as e: print(f"Error displaying map chip with box: {e}")
-        # else: print("Map chip with box image not available in results.") # Less verbose
-
         if img_matches is not None:
-            try:
-                h_match, w_match = img_matches.shape[:2]
-                max_display_w = 1800
-                img_matches_display = img_matches
-                if w_match > max_display_w:
-                    scale_match = max_display_w / w_match
-                    img_matches_display = cv2.resize(img_matches, None, fx=scale_match, fy=scale_match, interpolation=cv2.INTER_AREA)
-                cv2.imshow("Feature Matches (SuperGlue Inliers)", img_matches_display)
-                display_windows_opened = True
-            except Exception as e: print(f"Error displaying feature matches: {e}")
-        # else: print("Feature matches visualization image not available in results.") # Less verbose
+             try:
+                 h_match, w_match = img_matches.shape[:2]
+                 max_display_w = 1800
+                 img_matches_display = img_matches
+                 if w_match > max_display_w:
+                     scale_match = max_display_w / w_match
+                     img_matches_display = cv2.resize(img_matches, None, fx=scale_match, fy=scale_match, interpolation=cv2.INTER_AREA)
+                 cv2.imshow("Feature Matches (SuperGlue Inliers)", img_matches_display)
+                 display_windows_opened = True
+             except Exception as e: print(f"Error displaying feature matches: {e}")
 
-    # --- Error Handling for Localization Failure ---
     elif result_data and 'error' in result_data:
          print(f"Localization Error details: {result_data['error']}")
     else:
         print("Localization failed or encountered an unknown error.")
 
-    # --- Display Monitoring Results ---
+    # --- Conditional Display Monitoring Results ---
+    # This block remains uncommented, relies on usage_stats being None if not run
     if usage_stats:
         print("\n--- Resource Usage During run_localization ---")
         print(f"CPU Usage (%): Avg={usage_stats['avg_cpu']:.1f}, Max={usage_stats['max_cpu']:.1f}")
         print(f"RAM Usage (%): Avg={usage_stats['avg_ram']:.1f}, Max={usage_stats['max_ram']:.1f}")
-        # Check if GPU stats are meaningful (available and some data collected)
-        if "avg_gpu_util" in usage_stats and (usage_stats['avg_gpu_util'] > 0 or usage_stats['max_gpu_util'] > 0 or usage_stats['avg_gpu_mem'] > 0):
+        # Check if GPU stats are meaningful (collected data)
+        if usage_stats['avg_gpu_util'] > 0 or usage_stats['max_gpu_util'] > 0 or usage_stats['avg_gpu_mem'] > 0:
             print(f"GPU Utilization (%): Avg={usage_stats['avg_gpu_util']:.1f}, Max={usage_stats['max_gpu_util']:.1f}")
             print(f"GPU Memory Usage (%): Avg={usage_stats['avg_gpu_mem']:.1f}, Max={usage_stats['max_gpu_mem']:.1f}")
+        # Distinguish between monitoring being unavailable vs just zero usage
         elif GPU_MONITORING_AVAILABLE:
-            print("GPU Monitoring: Enabled but failed to collect stats or usage was zero.")
-        else:
-            print("GPU Monitoring: Not available on this system.")
-    else:
-        print("\nMonitoring data unavailable (Monitor might have been stopped early or failed).")
+             print("GPU Monitoring: Usage was zero or stats collection failed.")
+        elif ENABLE_MONITORING: # Tried to enable but failed
+             print("GPU Monitoring: Attempted but pynvml not available/initialized.")
+        # else: # Monitoring was disabled globally, no message needed
+    elif ENABLE_MONITORING: # Flag was True, but monitor didn't run or returned None
+         print("\nMonitoring enabled but failed to collect sufficient data.")
+    # No "else" needed here if monitoring was disabled by the flag
 
-
-    # --- Wait for Key Press if Windows Were Opened ---
+    # --- Wait for Key Press (Conditional) ---
+    #(Keep commented if display isn't working/needed)
     if display_windows_opened:
         print("\nPress any key in an image window to close...")
         cv2.waitKey(0)
         cv2.destroyAllWindows()
         print("Image windows closed.")
 
-    # --- Shutdown GPU monitoring ---
-    if GPU_MONITORING_AVAILABLE:
+    # --- Conditional Shutdown GPU monitoring ---
+    # Check uses the flag that indicates successful initialization
+    if GPU_MONITORING_AVAILABLE and pynvml:
         try:
-             pynvml.nvmlShutdown()
-             print("NVML Shutdown.")
-        except Exception as e: # Catch potential errors during shutdown too
+            pynvml.nvmlShutdown()
+            print("NVML Shutdown.")
+        except Exception as e:
              print(f"Error during nvmlShutdown: {e}")
 
     print("\n--- Script Finished ---")

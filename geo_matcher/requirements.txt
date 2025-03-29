@@ -6,3 +6,13 @@ Pillow
 rasterio 
 pyproj
 opencv-python-headless
+torch
+torchvision
+torchaudio
+opencv-python
+numpy
+psutil
+pynvml
+
+# Optional (Uncomment if needed for specific plotting/visualization)
+# matplotlib
