@@ -243,6 +243,56 @@ def run_localization(lat, lon, aerial_photo_path, save_output=True, output_dir_o
     img_with_box = map_chip_clean.copy() # Initialize image for drawing box
     print(f"Map chip obtained. Shape: {map_chip_np.shape}")
 
+    print("\n--- [DEBUG] Visualizing Grayscale Inputs ---")
+    try:
+        gray_aerial_display = None
+        gray_map_chip_display = None
+
+        # Convert Aerial Image
+        if img_np is not None:
+            if len(img_np.shape) == 3: # Color
+                gray_aerial_display = cv2.cvtColor(img_np, cv2.COLOR_BGR2GRAY)
+            elif len(img_np.shape) == 2: # Already Grayscale
+                gray_aerial_display = img_np
+            if gray_aerial_display is not None:
+                # Optional: Resize for consistent display size
+                # gray_aerial_display = cv2.resize(gray_aerial_display, (600, 600))
+                cv2.imshow("DEBUG: Grayscale Aerial Input", gray_aerial_display)
+
+        # Convert Map Chip
+        if map_chip_np is not None:
+            if len(map_chip_np.shape) == 3: # Color (3 or 4 channels)
+                if map_chip_np.shape[2] == 4: # BGRA/RGBA
+                    gray_map_chip_display = cv2.cvtColor(map_chip_np, cv2.COLOR_BGRA2GRAY)
+                else: # BGR/RGB
+                    gray_map_chip_display = cv2.cvtColor(map_chip_np, cv2.COLOR_BGR2GRAY)
+            elif len(map_chip_np.shape) == 2: # Already Grayscale
+                gray_map_chip_display = map_chip_np
+            if gray_map_chip_display is not None:
+                # Optional: Resize for consistent display size
+                # gray_map_chip_display = cv2.resize(gray_map_chip_display, (600, 600))
+                cv2.imshow("DEBUG: Grayscale Map Chip Input", gray_map_chip_display)
+
+        # Wait for user key press if any image was shown
+        if gray_aerial_display is not None or gray_map_chip_display is not None:
+            print(">>> Displaying grayscale images. Press any key in an image window to continue...")
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
+            print(">>> Continuing localization...")
+        else:
+            print("No grayscale images generated for display.")
+
+    except Exception as e_gray_vis:
+        print(f"ERROR during grayscale visualization: {e_gray_vis}")
+        # Ensure windows are closed if error occurred after imshow but before waitKey
+        cv2.destroyAllWindows()
+    print("--- [DEBUG] End Grayscale Visualization ---\n")
+
+    # --- End of added block ---
+
+    # The call to find_match(...) should come after this block
+    # M, inliers_mask_ransac, kp1_np, kp2_np, match_idx_kp1, match_idx_kp2 = find_match(...)
+
     # --- Perform Feature Matching ---
     print("\n--- [Visual Localizer] Starting Feature Matching ---")
     start_time_match = time.time()
@@ -301,11 +351,15 @@ def run_localization(lat, lon, aerial_photo_path, save_output=True, output_dir_o
 
             # Check if conversion ultimately failed
             if calculated_lon_lat is None:
-                 print("[Visual Localizer] Coordinate conversion failed after homography.")
-                 # Return error, pass None for result_data
-                 return RESULT_ERROR_COORDS, None
+                print("[Visual Localizer] Coordinate conversion failed after homography.")
+                # Return error, include base images
+                failure_data = {'error': 'Coordinate conversion failed'}
+                if 'img_clean' in locals() and img_clean is not None: failure_data['img_clean'] = img_clean
+                if 'map_chip_clean' in locals() and map_chip_clean is not None: failure_data['map_chip_clean'] = map_chip_clean
+                return RESULT_ERROR_COORDS, failure_data # <<< MODIFIED: Return dict
             else:
                 # Draw bounding box and center point ONLY if coordinates are valid
+                # (Keep drawing logic as is)
                 img_with_box = draw_bounding_box(img_with_box, M, img_w, img_h, color=(0, 255, 255), thickness=2)
                 try:
                     cv2.circle(img_with_box, (int(round(center_x_chip)), int(round(center_y_chip))), radius=5, color=(255, 0, 0), thickness=-1)
@@ -314,12 +368,19 @@ def run_localization(lat, lon, aerial_photo_path, save_output=True, output_dir_o
 
         else: # center_x_chip is None
             print("[Visual Localizer] Could not calculate center/rotation from homography matrix.")
-            # Return match failed, pass None for result_data
-            return RESULT_MATCH_FAILED, None
+            # Return match failed, include base images
+            failure_data = {'error': 'Center/rotation calculation failed'}
+            if 'img_clean' in locals() and img_clean is not None: failure_data['img_clean'] = img_clean
+            if 'map_chip_clean' in locals() and map_chip_clean is not None: failure_data['map_chip_clean'] = map_chip_clean
+            return RESULT_MATCH_FAILED, failure_data # <<< MODIFIED: Return dict
+        
     else: # M is None
         print("\n--- [Visual Localizer] Homography Not Found ---")
-        # Return match failed, pass None for result_data
-        return RESULT_MATCH_FAILED, None
+        # Return match failed, include base images
+        failure_data = {'error': 'Homography not found (low matches/RANSAC failure)'}
+        if 'img_clean' in locals() and img_clean is not None: failure_data['img_clean'] = img_clean
+        if 'map_chip_clean' in locals() and map_chip_clean is not None: failure_data['map_chip_clean'] = map_chip_clean
+        return RESULT_MATCH_FAILED, failure_data # <<< MODIFIED: Return dict
 
     # --- Save Outputs (if requested and successful so far) ---
     if save_output and calculated_lon_lat is not None:
@@ -418,24 +479,36 @@ def run_localization(lat, lon, aerial_photo_path, save_output=True, output_dir_o
     # --- Return Result ---
     # Check successful calculation again before returning success
     if calculated_lon_lat is not None and calculated_angle is not None:
+        # --- SUCCESS PATH ---
         result_data = {
             'lat': calculated_lon_lat[1],
             'lon': calculated_lon_lat[0],
             'angle': calculated_angle,
-            # Use timestamp if generated, otherwise None
-            'timestamp': timestamp_now if timestamp_now else None,
-            # Pass back image data (or None if generation/saving failed)
+            'timestamp': timestamp_now if 'timestamp_now' in locals() else None,
             'img_with_box': img_with_box,
             'img_matches_vis': img_matches_vis
         }
-        # Return success even if image/coord saving had issues, as core localization worked
         return RESULT_SUCCESS, result_data
     else:
-        # If somehow calculated_lon_lat became None after initial checks
-        # (e.g., error during saving block, though less likely now)
-        # Ensure we don't return success.
-        # Determine the most likely failure point if not already returned.
+        # --- FAILURE PATH (Final Check) ---
+        print("[Visual Localizer] Reached final return block without success criteria met.")
+        # Prepare failure data dictionary
+        failure_data = {}
+        # Assume img_clean and map_chip_clean were defined earlier in the function scope
+        # Add them if they exist and are not None
+        if 'img_clean' in locals() and img_clean is not None:
+             failure_data['img_clean'] = img_clean
+        if 'map_chip_clean' in locals() and map_chip_clean is not None:
+             failure_data['map_chip_clean'] = map_chip_clean
+
+        # Determine likely reason based on M and calculated_lon_lat state
         if M is None:
-             return RESULT_MATCH_FAILED, None
-        else: # Homography found, but something failed after (likely coord conversion)
-             return RESULT_ERROR_COORDS, None
+             failure_data['error'] = 'Homography not found (final check)'
+             return RESULT_MATCH_FAILED, failure_data # <<< MODIFIED: Return dict
+        elif calculated_lon_lat is None: # Should have returned earlier, but as fallback
+             failure_data['error'] = 'Coordinate calculation failed (final check)'
+             return RESULT_ERROR_COORDS, failure_data # <<< MODIFIED: Return dict
+        else: # Unlikely case, but handle it
+             failure_data['error'] = 'Unknown processing error before final return'
+             # Return dictionary even for unknown error
+             return RESULT_ERROR_UNKNOWN, failure_data # <<< MODIFIED: Return dict

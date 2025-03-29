@@ -286,67 +286,112 @@ if __name__ == "__main__":
 
     # --- Process Result (Including Image Display) ---
     # (This part remains largely the same)
+     # --- Process Result (Including Image Display) ---
     print(f"\n--- Result ---")
     print(f"Status: {status}")
 
-    display_windows_opened = False
+    display_windows_opened = False # Flag to track if we need waitKey
+
+    # Print details if successful
     if status == RESULT_SUCCESS and result_data:
-        print(f"Calculated Latitude:  {result_data['lat']:.6f}")
-        print(f"Calculated Longitude: {result_data['lon']:.6f}")
-        print(f"Calculated Angle:     {result_data['angle']:.2f}")
+        print(f"Calculated Latitude:  {result_data.get('lat', 'N/A'):.6f}")
+        print(f"Calculated Longitude: {result_data.get('lon', 'N/A'):.6f}")
+        print(f"Calculated Angle:     {result_data.get('angle', 'N/A'):.2f}")
         if not args.no_save: print(f"\nOutput images/coordinates potentially saved.")
         else: print(f"\nOutput saving disabled via --no-save.")
-
-        # Display Logic (Keep commented if display isn't working/needed)
-        print("\nAttempting to display result images...")
-        display_scale = 0.7
-        img_box = result_data.get('img_with_box')
-        img_matches = result_data.get('img_matches_vis')
-        if img_box is not None:
-             try:
-                 img_box_display = cv2.resize(img_box, None, fx=display_scale, fy=display_scale)
-                 cv2.imshow("Map Chip with Box / Center", img_box_display)
-                 display_windows_opened = True
-             except Exception as e: print(f"Error displaying map chip with box: {e}")
-        if img_matches is not None:
-             try:
-                 h_match, w_match = img_matches.shape[:2]
-                 max_display_w = 1800
-                 img_matches_display = img_matches
-                 if w_match > max_display_w:
-                     scale_match = max_display_w / w_match
-                     img_matches_display = cv2.resize(img_matches, None, fx=scale_match, fy=scale_match, interpolation=cv2.INTER_AREA)
-                 cv2.imshow("Feature Matches (SuperGlue Inliers)", img_matches_display)
-                 display_windows_opened = True
-             except Exception as e: print(f"Error displaying feature matches: {e}")
-
+    # Print error details if available on failure
     elif result_data and 'error' in result_data:
          print(f"Localization Error details: {result_data['error']}")
-    else:
-        print("Localization failed or encountered an unknown error.")
+    elif status != RESULT_SUCCESS:
+         print("Localization failed with an unknown error or no details provided.")
 
-    # --- Conditional Display Monitoring Results ---
+    # --- Attempt to Display Images (Success or Failure) ---
+    print("\nAttempting to display images...")
+    display_scale = 0.7 # Adjust scale as needed
+
+    if result_data: # Check if result_data dictionary exists at all
+        img_box = result_data.get('img_with_box')         # Available on success
+        img_matches = result_data.get('img_matches_vis')  # Available on success
+        # Get base images (assuming visual_localizer was modified to return them on failure)
+        img_clean_aerial = result_data.get('img_clean')
+        img_clean_map_chip = result_data.get('map_chip_clean')
+
+        if status == RESULT_SUCCESS:
+            # Display results on Success
+            if img_box is not None:
+                try:
+                    img_box_display = cv2.resize(img_box, None, fx=display_scale, fy=display_scale)
+                    cv2.imshow("Map Chip with Box / Center (SUCCESS)", img_box_display)
+                    display_windows_opened = True
+                except Exception as e: print(f"Error displaying success box image: {e}")
+
+            if img_matches is not None:
+                try:
+                    # Add resize logic for matches image if needed (copied from previous version)
+                    h_match, w_match = img_matches.shape[:2]
+                    max_display_w = 1800
+                    img_matches_display = img_matches
+                    if w_match > max_display_w:
+                        scale_match = max_display_w / w_match
+                        img_matches_display = cv2.resize(img_matches, None, fx=scale_match, fy=scale_match, interpolation=cv2.INTER_AREA)
+                    # --- end resize ---
+                    cv2.imshow("Feature Matches (SUCCESS)", img_matches_display)
+                    display_windows_opened = True
+                except Exception as e: print(f"Error displaying success matches image: {e}")
+
+        else:
+            # Display inputs on Failure (if available)
+            print(f"Localization Status: {status}. Displaying input images if available.")
+            if img_clean_aerial is not None:
+                try:
+                    # Resize aerial input for display if needed
+                    h_a, w_a = img_clean_aerial.shape[:2]
+                    scale_a = display_scale
+                    # Optional: Limit max size
+                    # max_h, max_w = 800, 1000
+                    # if h_a * scale_a > max_h or w_a * scale_a > max_w:
+                    #     scale_a = min(max_h / h_a, max_w / w_a)
+
+                    img_aerial_display = cv2.resize(img_clean_aerial, None, fx=scale_a, fy=scale_a)
+                    cv2.imshow(f"Aerial Input ({status})", img_aerial_display)
+                    display_windows_opened = True
+                except Exception as e: print(f"Error displaying aerial input on failure: {e}")
+
+            if img_clean_map_chip is not None:
+                try:
+                    # Handle potential 4 channels (RGBA/BGRA) in map chip before display/resize
+                    img_map_chip_todisplay = img_clean_map_chip
+                    if img_map_chip_todisplay.shape[2] == 4:
+                         # Assuming BGRA, convert to BGR for display
+                         img_map_chip_todisplay = cv2.cvtColor(img_map_chip_todisplay, cv2.COLOR_BGRA2BGR)
+
+                    # Resize map chip input for display if needed
+                    h_m, w_m = img_map_chip_todisplay.shape[:2]
+                    scale_m = display_scale
+                    # Optional: Limit max size
+                    # max_h, max_w = 800, 1000
+                    # if h_m * scale_m > max_h or w_m * scale_m > max_w:
+                    #     scale_m = min(max_h / h_m, max_w / w_m)
+
+                    img_map_chip_display = cv2.resize(img_map_chip_todisplay, None, fx=scale_m, fy=scale_m)
+                    cv2.imshow(f"Map Chip ({status})", img_map_chip_display)
+                    display_windows_opened = True
+                except Exception as e: print(f"Error displaying map chip on failure: {e}")
+
+    else: # result_data itself is None
+         print("No result data available to display.")
+
+
+    # --- Display Monitoring Results (if ENABLE_MONITORING was True and stats collected) ---
     # This block remains uncommented, relies on usage_stats being None if not run
-    if usage_stats:
+    if 'usage_stats' in locals() and usage_stats: # Check if variable exists and is not None
         print("\n--- Resource Usage During run_localization ---")
-        print(f"CPU Usage (%): Avg={usage_stats['avg_cpu']:.1f}, Max={usage_stats['max_cpu']:.1f}")
-        print(f"RAM Usage (%): Avg={usage_stats['avg_ram']:.1f}, Max={usage_stats['max_ram']:.1f}")
-        # Check if GPU stats are meaningful (collected data)
-        if usage_stats['avg_gpu_util'] > 0 or usage_stats['max_gpu_util'] > 0 or usage_stats['avg_gpu_mem'] > 0:
-            print(f"GPU Utilization (%): Avg={usage_stats['avg_gpu_util']:.1f}, Max={usage_stats['max_gpu_util']:.1f}")
-            print(f"GPU Memory Usage (%): Avg={usage_stats['avg_gpu_mem']:.1f}, Max={usage_stats['max_gpu_mem']:.1f}")
-        # Distinguish between monitoring being unavailable vs just zero usage
-        elif GPU_MONITORING_AVAILABLE:
-             print("GPU Monitoring: Usage was zero or stats collection failed.")
-        elif ENABLE_MONITORING: # Tried to enable but failed
-             print("GPU Monitoring: Attempted but pynvml not available/initialized.")
-        # else: # Monitoring was disabled globally, no message needed
-    elif ENABLE_MONITORING: # Flag was True, but monitor didn't run or returned None
-         print("\nMonitoring enabled but failed to collect sufficient data.")
-    # No "else" needed here if monitoring was disabled by the flag
+        # ... (rest of monitoring print logic) ...
+    elif 'ENABLE_MONITORING' in globals() and ENABLE_MONITORING: # Check if monitoring flag exists
+         print("\nMonitoring enabled but failed to collect sufficient data or monitor didn't run.")
 
-    # --- Wait for Key Press (Conditional) ---
-    #(Keep commented if display isn't working/needed)
+
+    # --- Wait for Key Press if any Windows Were Opened ---
     if display_windows_opened:
         print("\nPress any key in an image window to close...")
         cv2.waitKey(0)
@@ -355,7 +400,7 @@ if __name__ == "__main__":
 
     # --- Conditional Shutdown GPU monitoring ---
     # Check uses the flag that indicates successful initialization
-    if GPU_MONITORING_AVAILABLE and pynvml:
+    if 'GPU_MONITORING_AVAILABLE' in globals() and GPU_MONITORING_AVAILABLE and 'pynvml' in globals() and pynvml:
         try:
             pynvml.nvmlShutdown()
             print("NVML Shutdown.")

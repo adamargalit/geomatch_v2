@@ -10,10 +10,16 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 # This MUST point to the .png file. Make sure the filename here matches
 # the actual name of your .png file in the data/offline_map folder.
 OFFLINE_MAP_FILE = os.path.join(DATA_DIR, "offline_map", "ramat_hasharon_map.png") # <-- ADJUST FILENAME if needed
+#Offline Map List
+# ramat_hasharon_map
+# TA_zoom
+# tel_aviv_north_map
 
 # This path is for later when you provide the drone/aerial photos
 INPUT_AERIAL_DIR = os.path.join(DATA_DIR, "input_aerial_photos")
 
+# CHIP SIZE to take from offline map around last known GPS or HOME coordinate
+MAP_CHIP_SIZE_PX = 500
 
 # --- Model Weights Paths ---
 WEIGHTS_DIR = os.path.join(BASE_DIR, "weights")
